@@ -1,0 +1,50 @@
+# Start:   docker compose up -d      then open http://localhost:8000
+# Config:  optional .env next to this file (see .env.example)
+name: applybot
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: applybot
+      POSTGRES_USER: applybot
+      POSTGRES_PASSWORD: ${APPLYBOT_DB_PASSWORD:-applybot}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U applybot -d applybot"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: .
+    image: applybot:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: applybot
+      DB_USER: applybot
+      DB_PASSWORD: ${APPLYBOT_DB_PASSWORD:-applybot}
+      DATA_DIR: /data
+      TZ: ${TZ:-Asia/Kolkata}
+    ports:
+      # Only reachable from this computer. Set APPLYBOT_BIND=0.0.0.0 (and APP_PASSWORD!) to share it on your network.
+      - "${APPLYBOT_BIND:-127.0.0.1}:${APPLYBOT_PORT:-8000}:8000"
+    volumes:
+      - appdata:/data
+    extra_hosts:
+      # lets the app reach services on your machine, e.g. Ollama at http://host.docker.internal:11434/v1
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  pgdata:
+  appdata:

@@ -1,0 +1,36 @@
+# --- secrets: never commit ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- personal data (resumes, generated files, local database dumps) ---
+data/
+resumes/
+*.pdf
+*.tex
+*.sql
+*.dump
+resume.txt
+latex.txt
+profile.txt
+preferences.txt
+*.bak
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+.pytest_cache/
+
+# --- frontend ---
+frontend/node_modules/
+frontend/dist/
+
+# --- editors / OS ---
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
