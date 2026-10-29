@@ -35,7 +35,11 @@ CREATE TABLE IF NOT EXISTS jobs (
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS email_drafted boolean,
                  ADD COLUMN IF NOT EXISTS drafted_at timestamptz,
                  ADD COLUMN IF NOT EXISTS resume_file text,
-                 ADD COLUMN IF NOT EXISTS source text DEFAULT 'technopark';
+                 ADD COLUMN IF NOT EXISTS source text DEFAULT 'technopark',
+                 ADD COLUMN IF NOT EXISTS draft_subject text,
+                 ADD COLUMN IF NOT EXISTS draft_body text,
+                 ADD COLUMN IF NOT EXISTS draft_message_id text,
+                 ADD COLUMN IF NOT EXISTS sent_at timestamptz;
 CREATE INDEX IF NOT EXISTS jobs_match_idx ON jobs (applicable, score DESC);
 
 CREATE TABLE IF NOT EXISTS settings (

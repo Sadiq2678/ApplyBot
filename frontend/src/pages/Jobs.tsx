@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Briefcase, ChevronLeft, ChevronRight, ExternalLink, FileText, Mail, RefreshCw, Search, Send, Undo2, Wand2, X } from 'lucide-react'
+import { Briefcase, ChevronLeft, ChevronRight, ExternalLink, FileText, Mail, Paperclip, Pencil, RefreshCw, Search, Send, Undo2, Wand2, X } from 'lucide-react'
 import clsx from 'clsx'
-import { api, type Job, type JobSummary } from '../api'
+import { ApiError, api, type Draft, type Job, type JobSummary } from '../api'
 import { useStartRun, useStats } from '../hooks'
 import { useToast } from '../components/toast'
-import { Badge, Button, Card, EmptyState, Input, JOB_STATUS, PageHeader, ScoreBadge, Select, Spinner, formatDate } from '../components/ui'
+import { Badge, Button, Card, EmptyState, Input, JOB_STATUS, PageHeader, ScoreBadge, Select, Spinner, Textarea, formatDate } from '../components/ui'
 
 const TABS = [
   { value: 'match', label: 'Matches' },
@@ -279,7 +279,7 @@ function JobDrawer({ jobId, onClose }: { jobId: number; onClose: () => void }) {
                   ['Closes', formatDate(job.closing_date)],
                   ['Experience', job.experience_required || '–'],
                   ['Apply to', job.contact_email || 'Company website'],
-                  ['Drafted', job.drafted_at ? formatDate(job.drafted_at, true) : '–'],
+                  job.sent_at ? ['Sent', formatDate(job.sent_at, true)] : ['Drafted', job.drafted_at ? formatDate(job.drafted_at, true) : '–'],
                   ['Found', formatDate(job.created_at)],
                 ].map(([k, v]) => (
                   <div key={k} className="min-w-0">
@@ -288,6 +288,10 @@ function JobDrawer({ jobId, onClose }: { jobId: number; onClose: () => void }) {
                   </div>
                 ))}
               </dl>
+
+              {job.contact_email && (job.status === 'drafted' || (job.email_sent && job.email_drafted)) && (
+                <DraftEmail job={job} busy={busy} />
+              )}
 
               {job.applicable !== null ? (
                 <Section title="Fit">
@@ -335,5 +339,136 @@ function JobDrawer({ jobId, onClose }: { jobId: number; onClose: () => void }) {
         )}
       </div>
     </div>
+  )
+}
+
+/** View, edit and send the application email of a drafted job. */
+function DraftEmail({ job, busy }: { job: Job; busy: boolean }) {
+  const qc = useQueryClient()
+  const toast = useToast()
+  const [editing, setEditing] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [subject, setSubject] = useState('')
+  const [body, setBody] = useState('')
+  const { data: draft, isLoading, error } = useQuery({
+    queryKey: ['jobs', 'draft', job.id, job.drafted_at],
+    queryFn: () => api.get<Draft>(`/jobs/${job.id}/draft`),
+    retry: false,
+  })
+
+  const startEdit = () => {
+    setSubject(draft!.subject)
+    setBody(draft!.body)
+    setEditing(true)
+    setConfirming(false)
+  }
+  const letter = () => (editing ? { subject, body } : { subject: draft!.subject, body: draft!.body })
+
+  const save = useMutation({
+    mutationFn: () => api.put<Draft>(`/jobs/${job.id}/draft`, letter()),
+    onSuccess: (d) => {
+      qc.setQueryData(['jobs', 'draft', job.id, job.drafted_at], d)
+      setEditing(false)
+      toast('Draft updated in Gmail')
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  })
+  const send = useMutation({
+    mutationFn: () => api.post<Job>(`/jobs/${job.id}/send`, letter()),
+    onSuccess: (j) => {
+      qc.setQueryData(['jobs', 'detail', job.id], j)
+      qc.invalidateQueries({ queryKey: ['jobs', 'list'] })
+      qc.invalidateQueries({ queryKey: ['jobs', 'draft', job.id] })
+      qc.invalidateQueries({ queryKey: ['stats'] })
+      setEditing(false)
+      setConfirming(false)
+      toast(`Sent to ${j.contact_email}. Moved to Applied`)
+    },
+    onError: (e: Error) => {
+      setConfirming(false)
+      toast(e.message, 'error')
+    },
+  })
+
+  // an applied job without a stored letter (sent from Gmail or marked by hand): nothing to show
+  if (job.email_sent && (error instanceof ApiError && error.status === 404)) return null
+  const sent = job.email_sent
+  const pending = save.isPending || send.isPending
+  const attachmentUrl = job.resume_pdf ? `/api/jobs/${job.id}/resume.pdf` : '/api/settings/base-pdf'
+
+  return (
+    <Section title={sent ? 'Sent email' : 'Application email'}>
+      <div className="rounded-lg border border-zinc-200 dark:border-zinc-800">
+        {isLoading ? (
+          <div className="flex justify-center p-6"><Spinner /></div>
+        ) : error || !draft ? (
+          <p className="p-4 text-sm text-amber-800 dark:text-amber-400">{(error as Error)?.message ?? 'Draft not found'}</p>
+        ) : (
+          <>
+            <dl className="space-y-2 border-b border-zinc-200 px-4 py-3 text-sm dark:border-zinc-800">
+              <div className="flex gap-2">
+                <dt className="w-16 shrink-0 text-zinc-500 dark:text-zinc-400">To</dt>
+                <dd className="min-w-0 truncate font-medium">{draft.to}</dd>
+              </div>
+              <div className="flex items-center gap-2">
+                <dt className="w-16 shrink-0 text-zinc-500 dark:text-zinc-400">Subject</dt>
+                <dd className="min-w-0 flex-1">
+                  {editing ? (
+                    <Input value={subject} onChange={(e) => setSubject(e.target.value)} aria-label="Subject" />
+                  ) : (
+                    <span className="font-medium">{draft.subject}</span>
+                  )}
+                </dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="w-16 shrink-0 text-zinc-500 dark:text-zinc-400">Attached</dt>
+                <dd className="min-w-0 truncate">
+                  {draft.attachment ? (
+                    <a href={attachmentUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-indigo-600 hover:underline dark:text-indigo-400">
+                      <Paperclip className="size-3.5" />
+                      {draft.attachment}
+                    </a>
+                  ) : (
+                    <span className="text-red-600 dark:text-red-400">No resume PDF</span>
+                  )}
+                </dd>
+              </div>
+            </dl>
+            {editing ? (
+              <div className="p-3">
+                <Textarea value={body} onChange={(e) => setBody(e.target.value)} rows={16} aria-label="Message" className="leading-relaxed" />
+              </div>
+            ) : (
+              <p className="px-4 py-3 text-sm leading-relaxed whitespace-pre-line text-zinc-700 dark:text-zinc-300">{draft.body}</p>
+            )}
+            {!sent && (
+              <div className="flex flex-wrap items-center gap-2 border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
+                {editing ? (
+                  <>
+                    <Button size="sm" loading={save.isPending} disabled={send.isPending || !subject.trim() || !body.trim()} onClick={() => save.mutate()}>Save changes</Button>
+                    <Button size="sm" variant="ghost" disabled={pending} onClick={() => setEditing(false)}>Cancel</Button>
+                  </>
+                ) : (
+                  <Button size="sm" icon={<Pencil className="size-3.5" />} disabled={pending || busy} onClick={startEdit}>Edit</Button>
+                )}
+                <div className="ml-auto flex items-center gap-2">
+                  {confirming ? (
+                    <>
+                      <span className="text-xs text-zinc-600 dark:text-zinc-400">Send to {draft.to}?</span>
+                      <Button size="sm" variant="ghost" disabled={send.isPending} onClick={() => setConfirming(false)}>No</Button>
+                      <Button size="sm" variant="primary" icon={<Send className="size-3.5" />} loading={send.isPending} onClick={() => send.mutate()}>Yes, send</Button>
+                    </>
+                  ) : (
+                    <Button size="sm" variant="primary" icon={<Send className="size-3.5" />} disabled={pending || busy || !draft.attachment || (editing && (!subject.trim() || !body.trim()))} onClick={() => setConfirming(true)}>
+                      Send
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </Section>
   )
 }

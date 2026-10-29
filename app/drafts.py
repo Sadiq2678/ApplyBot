@@ -1,18 +1,23 @@
 """Write a cover letter with the LLM and save it as a Gmail draft with the resume attached.
 
-Nothing is ever sent: drafts land in the Gmail Drafts folder to review and send by hand.
+Nothing is sent automatically: drafts land in the Gmail Drafts folder, where they can be
+reviewed, edited and sent from the web UI (or from Gmail itself).
 Needs a Gmail App Password (https://myaccount.google.com/apppasswords) and IMAP enabled.
 """
 
+import email
+import email.policy
 import imaplib
 import re
+import smtplib
 import time
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 
 import psycopg2.extras
 
-from .config import candidate_name
+from .config import BASE_PDF, candidate_name
+from .resumes import resume_pdf
 from .llm import ask_llm
 from .runtime import log
 
@@ -57,7 +62,7 @@ class GmailError(RuntimeError):
 def load_jobs(conn, min_score, job_ids=None, force=False):
     """Open, applicable jobs with a contact email that have not been drafted or sent yet."""
     query = ("SELECT id, title, company, contact_email, closing_date, description, skills, "
-             "matching_skills, missing_skills, resume_file FROM jobs "
+             "matching_skills, missing_skills, resume_file, draft_message_id FROM jobs "
              "WHERE applicable = true AND coalesce(score, 0) >= %s "
              "AND coalesce(contact_email, '') <> '' "
              "AND (closing_date IS NULL OR closing_date >= current_date)")
@@ -133,6 +138,26 @@ def gmail_login(cfg):
     return imap, drafts_folder(imap)
 
 
+def find_drafts(imap, folder, job):
+    """UIDs of this job's Gmail draft: by Message-ID, or by recipient for older drafts."""
+    imap.select(folder)
+    if job.get("draft_message_id"):
+        typ, data = imap.uid("SEARCH", None, "HEADER", "Message-ID",
+                             f'"{job["draft_message_id"]}"')
+    else:
+        typ, data = imap.uid("SEARCH", None, "TO", f'"{job["contact_email"]}"')
+    return data[0].split() if typ == "OK" and data and data[0] else []
+
+
+def delete_drafts(imap, folder, job):
+    if not job.get("draft_message_id"):  # never guess by recipient: it may be another job's
+        return
+    uids = find_drafts(imap, folder, job)
+    if uids:
+        imap.uid("STORE", b",".join(uids), "+FLAGS", "(\\Deleted)")
+        imap.expunge()
+
+
 def draft_job(conn, imap, folder, job, pdf, cfg):
     """Write the cover letter and save it as a Gmail draft (imap None = dry run).
 
@@ -154,8 +179,99 @@ def draft_job(conn, imap, folder, job, pdf, cfg):
     if typ != "OK":
         log.info(f"  Gmail refused the draft: {data}")
         return False
+    if job.get("draft_message_id"):  # drafting again: remove the previous draft
+        delete_drafts(imap, folder, job)
+    save_letter(conn, job["id"], subject, body, msg["Message-ID"])
     with conn.cursor() as cur:
         cur.execute("UPDATE jobs SET email_drafted = true, drafted_at = now(), "
                     "updated_at = now() WHERE id = %s", (job["id"],))
     log.info(f"  saved to Gmail Drafts: {subject}")
     return True
+
+
+# ------------------------------------------- review, edit and send from the UI ----
+
+def save_letter(conn, job_id, subject, body, message_id):
+    with conn.cursor() as cur:
+        cur.execute("UPDATE jobs SET draft_subject = %s, draft_body = %s, draft_message_id = %s, "
+                    "updated_at = now() WHERE id = %s", (subject, body, message_id, job_id))
+
+
+def attachment_pdf(job):
+    """The PDF a draft carries: the job's tailored resume, else the base PDF."""
+    return resume_pdf(job) or (BASE_PDF if BASE_PDF.exists() else None)
+
+
+def read_gmail_draft(conn, cfg, job):
+    """Fetch the subject and body of a draft made before letters were stored, and store them.
+
+    Returns False when the draft is no longer in Gmail (sent or deleted there).
+    """
+    imap, folder = gmail_login(cfg)
+    try:
+        uids = find_drafts(imap, folder, job)
+        if not uids:
+            return False
+        typ, data = imap.uid("FETCH", uids[-1], "(RFC822)")
+    finally:
+        imap.logout()
+    if typ != "OK" or not data or not isinstance(data[0], tuple):
+        return False
+    msg = email.message_from_bytes(data[0][1], policy=email.policy.default)
+    part = msg.get_body(("plain",))
+    body = part.get_content().strip() if part else ""
+    job.update(draft_subject=str(msg["Subject"] or ""), draft_body=body,
+               draft_message_id=msg["Message-ID"])
+    save_letter(conn, job["id"], job["draft_subject"], body, job["draft_message_id"])
+    return True
+
+
+def replace_draft(conn, cfg, job, subject, body):
+    """Save an edited letter: a new Gmail draft replaces the old one."""
+    pdf = attachment_pdf(job)
+    if not pdf:
+        raise GmailError("No resume PDF to attach; tailor a resume or upload a base PDF")
+    msg = build_message(cfg["gmail_address"], job["contact_email"], subject, body,
+                        pdf, attachment_name(cfg))
+    imap, folder = gmail_login(cfg)
+    try:
+        typ, data = imap.append(folder, "\\Draft", imaplib.Time2Internaldate(time.time()),
+                                msg.as_bytes())
+        if typ != "OK":
+            raise GmailError(f"Gmail refused the draft: {data}")
+        delete_drafts(imap, folder, job)
+    finally:
+        imap.logout()
+    save_letter(conn, job["id"], subject, body, msg["Message-ID"])
+
+
+def send_application(conn, cfg, job, subject, body):
+    """Send the letter with the resume over Gmail SMTP, remove the draft, mark as applied."""
+    pdf = attachment_pdf(job)
+    if not pdf:
+        raise GmailError("No resume PDF to attach; tailor a resume or upload a base PDF")
+    if not (cfg["gmail_address"] and cfg["gmail_app_password"]):
+        raise GmailError("Set your Gmail address and App Password in Settings -> Gmail")
+    msg = build_message(cfg["gmail_address"], job["contact_email"], subject, body,
+                        pdf, attachment_name(cfg))
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=60) as smtp:
+            smtp.login(cfg["gmail_address"], cfg["gmail_app_password"])
+            smtp.send_message(msg)
+    except smtplib.SMTPAuthenticationError as e:
+        raise GmailError("Gmail login failed. Use an App Password, not your normal "
+                         "password.") from e
+    except (smtplib.SMTPException, OSError) as e:
+        raise GmailError(f"Sending failed: {e}") from e
+    with conn.cursor() as cur:  # it is sent: record that before tidying up Gmail
+        cur.execute("UPDATE jobs SET email_sent = true, sent_at = now(), draft_subject = %s, "
+                    "draft_body = %s, updated_at = now() WHERE id = %s",
+                    (subject, body, job["id"]))
+    try:
+        imap, folder = gmail_login(cfg)
+        try:
+            delete_drafts(imap, folder, job)
+        finally:
+            imap.logout()
+    except (GmailError, imaplib.IMAP4.error, OSError) as e:
+        log.info(f"Sent, but could not remove the Gmail draft for job {job['id']}: {e}")

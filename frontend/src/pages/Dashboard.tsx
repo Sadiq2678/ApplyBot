@@ -11,7 +11,7 @@ const SETUP_STEPS = [
   { key: 'resume', label: 'Add your resume', hint: 'Plain-text resume used to score every job', to: '/settings/profile' },
   { key: 'llm', label: 'Connect an AI provider', hint: 'Free Gemini or Groq keys work fine', to: '/settings/ai' },
   { key: 'attachment', label: 'Add a resume to attach', hint: 'A LaTeX resume to tailor, or a PDF to send as-is', to: '/settings/profile' },
-  { key: 'gmail', label: 'Connect Gmail', hint: 'Applications are saved as drafts, never sent', to: '/settings/gmail' },
+  { key: 'gmail', label: 'Connect Gmail', hint: 'Applications are saved as drafts for you to review and send', to: '/settings/gmail' },
 ] as const
 
 function Stat({ label, value, icon, to, hint }: { label: string; value: number | undefined; icon: React.ReactNode; to: string; hint?: string }) {
@@ -80,7 +80,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Stat label="Open matches" value={stats?.matches} icon={<Sparkles className="size-4" />} to="/jobs?status=match" hint={`Score ≥ ${stats?.min_score ?? 60}`} />
         <Stat label="Apply on site" value={stats?.manual} icon={<MousePointerClick className="size-4" />} to="/jobs?status=match" hint="Matches with no email" />
-        <Stat label="Drafts ready" value={stats?.drafted} icon={<Mail className="size-4" />} to="/jobs?status=drafted" hint="Review & send in Gmail" />
+        <Stat label="Drafts ready" value={stats?.drafted} icon={<Mail className="size-4" />} to="/jobs?status=drafted" hint="Review, edit & send" />
         <Stat label="Applied" value={stats?.applied} icon={<Send className="size-4" />} to="/jobs?status=applied&open_only=false" />
       </div>
 

@@ -1,6 +1,6 @@
 # ApplyBot
 
-ApplyBot finds jobs on **[Technopark](https://technopark.in)** and **[Infopark](https://infopark.in)** that fit your resume. It scores each one with an AI model, tailors a one-page resume for each match, and saves a ready-to-review application (cover letter with the resume attached) to your **Gmail Drafts**. Nothing is ever sent automatically.
+ApplyBot finds jobs on **[Technopark](https://technopark.in)** and **[Infopark](https://infopark.in)** that fit your resume. It scores each one with an AI model, tailors a one-page resume for each match, and saves a ready-to-review application (cover letter with the resume attached) to your **Gmail Drafts**. Nothing is sent automatically: you review, edit and send each one yourself.
 
 It runs on your own computer with Docker. You don't need Python, Node, LaTeX or PostgreSQL installed, and it works the same on Linux, macOS and Windows.
 
@@ -9,6 +9,7 @@ It runs on your own computer with Docker. You don't need Python, Node, LaTeX or 
 - **Daily pipeline**: scans only jobs posted since the last run, screens them by title, then scores the rest against your resume.
 - **Tailored resumes**: rewrites your LaTeX resume for each role and fits it to exactly one page. If you don't use LaTeX, it attaches your PDF as is.
 - **Cover letters**: writes a specific letter for each job and saves it to Gmail Drafts with the resume attached.
+- **Review, edit and send**: open a drafted job to read the email, edit the subject or text (the Gmail draft is updated), and send it. Sent jobs move to *Applied*.
 - **Web dashboard**: lets you search and filter jobs, see why each one fits, start runs, watch live logs, and mark jobs as applied.
 - **Any AI provider**: Google Gemini or Groq (both have free tiers), or any OpenAI-compatible API, including a local Ollama.
 - **Schedule**: optional automatic daily run.

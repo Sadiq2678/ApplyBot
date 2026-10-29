@@ -73,7 +73,17 @@ export interface Job extends JobSummary {
   email_sent: boolean
   email_drafted: boolean | null
   drafted_at: string | null
+  sent_at: string | null
   resume_pdf: string | null
+}
+
+export interface Draft {
+  to: string
+  subject: string
+  body: string
+  attachment: string | null
+  sent: boolean
+  sent_at: string | null
 }
 
 export interface Stats {

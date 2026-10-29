@@ -19,7 +19,8 @@ from pydantic import BaseModel
 from . import db
 from .config import (BASE_PDF, DATA_DIR, RESUMES_DIR, ROOT, SECRETS, SETTINGS, import_legacy_files,
                      load_settings, save_settings)
-from .drafts import GmailError, gmail_login
+from .drafts import (GmailError, attachment_pdf, gmail_login, read_gmail_draft, replace_draft,
+                     send_application)
 from .llm import PROVIDERS, REQUIRED, ask_llm
 from .resumes import have_pdflatex, resume_pdf
 from .runner import Busy, manager, start_scheduler
@@ -266,6 +267,71 @@ def patch_job(job_id: int, patch: JobPatch):
         sets = ", ".join(f"{k} = %({k})s" for k in changes)
         query(f"UPDATE jobs SET {sets}, updated_at = now() WHERE id = %(id)s RETURNING id",
               {**changes, "id": job_id}, one=True)
+    return get_job(job_id)
+
+
+class Letter(BaseModel):
+    subject: str
+    body: str
+
+
+def draft_response(job):
+    pdf = attachment_pdf(job)
+    return {"to": job["contact_email"], "subject": job["draft_subject"] or "",
+            "body": job["draft_body"] or "", "attachment": pdf.name if pdf else None,
+            "sent": bool(job["email_sent"]), "sent_at": job["sent_at"]}
+
+
+def gmail_call(fn, *args):
+    try:
+        fn(*args)
+    except (GmailError, OSError) as e:
+        raise HTTPException(502, str(e)[:400]) from e
+
+
+@app.get("/api/jobs/{job_id}/draft")
+def get_draft(job_id: int):
+    """The application email: stored with the job, or read once from older Gmail drafts."""
+    job = job_or_404(job_id)
+    if job["draft_body"] is None:
+        if not job["email_drafted"] or job["email_sent"]:
+            raise HTTPException(404, "No email drafted for this job")
+        try:
+            with db.connection() as conn:
+                found = read_gmail_draft(conn, settings(), job)
+        except (GmailError, OSError) as e:
+            raise HTTPException(502, str(e)[:400]) from e
+        if not found:
+            raise HTTPException(404, "The draft is no longer in Gmail; it may have been sent "
+                                     "or deleted there")
+    return draft_response(job)
+
+
+def editable_draft(job_id, letter):
+    job = job_or_404(job_id)
+    if job["email_sent"]:
+        raise HTTPException(409, "This application was already sent")
+    if not job["email_drafted"] or not job["contact_email"]:
+        raise HTTPException(409, "Create a draft for this job first")
+    if not letter.subject.strip() or not letter.body.strip():
+        raise HTTPException(422, {"errors": {"body": "Subject and message cannot be empty"}})
+    return job
+
+
+@app.put("/api/jobs/{job_id}/draft")
+def put_draft(job_id: int, letter: Letter):
+    job = editable_draft(job_id, letter)
+    with db.connection() as conn:
+        gmail_call(replace_draft, conn, settings(), job, letter.subject.strip(), letter.body.strip())
+    return draft_response(job_or_404(job_id))
+
+
+@app.post("/api/jobs/{job_id}/send")
+def send_draft(job_id: int, letter: Letter):
+    job = editable_draft(job_id, letter)
+    with db.connection() as conn:
+        gmail_call(send_application, conn, settings(), job, letter.subject.strip(),
+                   letter.body.strip())
     return get_job(job_id)
 
 
